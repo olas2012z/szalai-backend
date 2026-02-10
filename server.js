@@ -56,8 +56,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
  * API key passed via header x-goog-api-key.
  */
 async function callGemini(message) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return "SzalAI: brak GEMINI_API_KEY na Render (Environment Variables) 🔑";
+const apiKey = process.env.GEMINI_API_KEY;
+if (!apiKey) return "SzalAI: brak GEMINI_API_KEY na Render (Environment Variables) 🔑";
 
   // Najpewniejszy szybki model:
   const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
@@ -148,3 +148,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("SzalAI backend działa na porcie", PORT);
 });
+
