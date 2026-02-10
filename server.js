@@ -1,4 +1,4 @@
-// server.js (Gemini - AI Studio API Key)
+// server.js (POE API - OpenAI compatible)
 import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -19,15 +19,16 @@ app.use(
   })
 );
 
-// ✅ HEALTHCHECK + VERSION (żeby nie zgadywać co działa)
-app.get("/", (req, res) => res.status(200).send("SzalAI backend OK ✅ (GEMINI)"));
+// ✅ HEALTHCHECK + VERSION
+app.get("/", (req, res) => res.status(200).send("SzalAI backend OK ✅ (POE)"));
 app.get("/version", (req, res) =>
   res.status(200).json({
     ok: true,
-    llm: "gemini",
-    v: "2.1.0",
-    model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
-    hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    llm: "poe",
+    v: "3.0.0",
+    baseURL: "https://api.poe.com/v1",
+    model: process.env.POE_MODEL || "Claude-Sonnet-4",
+    hasPoeKey: !!process.env.POE_API_KEY,
   })
 );
 
@@ -52,40 +53,29 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 }
 
 /**
- * Gemini (Google Generative Language API) - v1 endpoint.
- * API key passed via header x-goog-api-key.
+ * Poe OpenAI-compatible chat completions
+ * POST https://api.poe.com/v1/chat/completions
+ * Auth: Authorization: Bearer POE_API_KEY
  */
-async function callGemini(message) {
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) return "SzalAI: brak GEMINI_API_KEY na Render (Environment Variables) 🔑";
+async function callPoe(message) {
+  const apiKey = process.env.POE_API_KEY;
+  if (!apiKey) return "SzalAI: brak POE_API_KEY na Render (Environment Variables) 🔑";
 
-  // Najpewniejszy szybki model:
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-
-  // ✅ v1 (stabilny). v1beta potrafi mieć inne nazwy modeli.
-  const url = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(
-    model
-  )}:generateContent`;
+  const model = process.env.POE_MODEL || "Claude-Sonnet-4";
+  const url = "https://api.poe.com/v1/chat/completions";
 
   const body = {
-    contents: [
+    model,
+    messages: [
       {
-        role: "user",
-        parts: [
-          {
-            text:
-              "Odpowiadaj po polsku, krótko i konkretnie.\n" +
-              "Jeśli pytanie jest niejasne, dopytaj.\n\n" +
-              "Użytkownik: " +
-              message,
-          },
-        ],
+        role: "system",
+        content:
+          "Odpowiadaj po polsku, krótko i konkretnie. Jeśli pytanie jest niejasne, dopytaj.",
       },
+      { role: "user", content: message },
     ],
-    generationConfig: {
-      maxOutputTokens: 300,
-      temperature: 0.7,
-    },
+    temperature: 0.7,
+    max_tokens: 300,
   };
 
   const r = await fetchWithTimeout(
@@ -94,7 +84,7 @@ if (!apiKey) return "SzalAI: brak GEMINI_API_KEY na Render (Environment Variable
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
     },
@@ -104,23 +94,19 @@ if (!apiKey) return "SzalAI: brak GEMINI_API_KEY na Render (Environment Variable
   const raw = await r.text().catch(() => "");
 
   if (!r.ok) {
-    return `SzalAI DEBUG: Gemini ERROR (${r.status}) ${preview(raw)}`;
+    // Poe zwraca błędy jak OpenAI-compatible; pokazujemy krótki debug
+    return `SzalAI DEBUG: POE ERROR (${r.status}) ${preview(raw)}`;
   }
 
   let data;
   try {
     data = JSON.parse(raw);
   } catch {
-    return `SzalAI DEBUG: Gemini non-JSON: ${preview(raw)}`;
+    return `SzalAI DEBUG: POE non-JSON: ${preview(raw)}`;
   }
 
-  const text =
-    data?.candidates?.[0]?.content?.parts
-      ?.map((p) => (typeof p?.text === "string" ? p.text : ""))
-      .join("")
-      .trim() || "";
-
-  if (!text) return "SzalAI DEBUG: Gemini OK, ale pusto ❌";
+  const text = data?.choices?.[0]?.message?.content?.trim?.() || "";
+  if (!text) return "SzalAI DEBUG: POE OK, ale pusto ❌";
 
   return text;
 }
@@ -134,7 +120,7 @@ app.post("/ask", async (req, res) => {
     }
 
     const safeMsg = message.trim().slice(0, 1200);
-    const reply = await callGemini(safeMsg);
+    const reply = await callPoe(safeMsg);
 
     res.json({ reply: brandSwap(reply) });
   } catch (err) {
@@ -148,4 +134,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("SzalAI backend działa na porcie", PORT);
 });
-
