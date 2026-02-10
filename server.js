@@ -1,4 +1,4 @@
-// server.js
+// server.js (Gemini AI Studio API Key)
 import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -19,19 +19,11 @@ app.use(
   })
 );
 
-// ---- HEALTH ----
-app.get("/", (req, res) => res.status(200).send("SzalAI backend OK ✅"));
-app.get("/ping", (req, res) => res.status(200).json({ ok: true, where: "ping" }));
+// --- Health / test ---
+app.get("/", (req, res) => res.status(200).send("SzalAI backend OK ✅ (Gemini)"));
 app.get("/version", (req, res) =>
-  res.status(200).json({ ok: true, name: "szalai-backend", v: "1.0.2" })
+  res.status(200).json({ ok: true, name: "szalai-backend", llm: "gemini", v: "2.0.0" })
 );
-
-app.get("/ask", (req, res) => {
-  res.status(200).json({
-    ok: true,
-    hint: 'Użyj POST /ask z JSON: {"message":"siema"}',
-  });
-});
 
 function brandSwap(text) {
   return String(text || "")
@@ -53,112 +45,81 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   }
 }
 
-function extractResponsesText(data) {
-  if (typeof data?.output_text === "string" && data.output_text.trim()) {
-    return data.output_text.trim();
-  }
-  if (Array.isArray(data?.output)) {
-    let out = "";
-    for (const item of data.output) {
-      if (Array.isArray(item?.content)) {
-        for (const c of item.content) {
-          if (typeof c?.text === "string") out += c.text;
-          else if (typeof c?.text?.value === "string") out += c.text.value;
-        }
-      }
-    }
-    if (out.trim()) return out.trim();
-  }
-  return "";
-}
+/**
+ * Gemini text call (Developer API / AI Studio API key)
+ * Docs: generateContent + contents/parts. :contentReference[oaicite:2]{index=2}
+ * API key in header x-goog-api-key. :contentReference[oaicite:3]{index=3}
+ */
+async function callGemini(message) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return "SzalAI DEBUG: brak GEMINI_API_KEY na Render ❌";
 
-async function callOpenAI(message) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return "SzalAI DEBUG: brak OPENAI_API_KEY na Render ❌";
+  // Model: możesz zmienić np. na "gemini-2.5-flash" albo "gemini-2.5-flash-lite"
+  // (nazwy modeli zmieniają się w czasie, więc jakby był 404, podeślij mi błąd)
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-  const system = "Jesteś SzalAI. Odpowiadasz po polsku, krótko i konkretnie.";
+  const system =
+    "Jesteś SzalAI. Odpowiadasz po polsku, krótko i konkretnie. Bez udawania oficjalnego ChatGPT.";
 
-  // 1) Responses
-  try {
-    const r = await fetchWithTimeout(
-      "https://api.openai.com/v1/responses",
+  // Endpoint (v1)
+  const url = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(
+    model
+  )}:generateContent`;
+
+  const body = {
+    contents: [
       {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          input: [
-            { role: "system", content: system },
-            { role: "user", content: message },
-          ],
-          max_output_tokens: 250,
-        }),
+        role: "user",
+        parts: [
+          {
+            text: `${system}\n\nUżytkownik: ${message}`,
+          },
+        ],
       },
-      15000
-    );
+    ],
+    generationConfig: {
+      maxOutputTokens: 300,
+      temperature: 0.7,
+    },
+  };
 
-    const raw = await r.text().catch(() => "");
-
-    if (!r.ok) {
-      return `SzalAI DEBUG: OpenAI /responses ERROR (${r.status}) ${preview(raw)}`;
-    }
-
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      return `SzalAI DEBUG: /responses non-JSON: ${preview(raw)}`;
-    }
-
-    const text = extractResponsesText(data);
-    if (text) return text;
-
-    return "SzalAI DEBUG: /responses OK, ale pusto ❌";
-  } catch (e) {
-    // fallback niżej
-  }
-
-  // 2) Chat Completions fallback
-  const r2 = await fetchWithTimeout(
-    "https://api.openai.com/v1/chat/completions",
+  const r = await fetchWithTimeout(
+    url,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
       },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: message },
-        ],
-        max_tokens: 250,
-      }),
+      body: JSON.stringify(body),
     },
     15000
   );
 
-  const raw2 = await r2.text().catch(() => "");
+  const raw = await r.text().catch(() => "");
 
-  if (!r2.ok) {
-    return `SzalAI DEBUG: OpenAI /chat ERROR (${r2.status}) ${preview(raw2)}`;
+  if (!r.ok) {
+    // Zwracamy czytelny błąd do Robloxa (bez klucza)
+    return `SzalAI DEBUG: Gemini ERROR (${r.status}) ${preview(raw)}`;
   }
 
-  let data2;
+  let data;
   try {
-    data2 = JSON.parse(raw2);
+    data = JSON.parse(raw);
   } catch {
-    return `SzalAI DEBUG: /chat non-JSON: ${preview(raw2)}`;
+    return `SzalAI DEBUG: Gemini non-JSON: ${preview(raw)}`;
   }
 
-  const out = data2?.choices?.[0]?.message?.content?.trim();
-  if (out) return out;
+  // Najczęstsza ścieżka: candidates[0].content.parts[].text
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((p) => (typeof p?.text === "string" ? p.text : ""))
+      .join("")
+      .trim() || "";
 
-  return "SzalAI DEBUG: /chat OK, ale pusto ❌";
+  if (!text) return "SzalAI DEBUG: Gemini OK, ale pusto ❌";
+
+  return text;
 }
 
 app.post("/ask", async (req, res) => {
@@ -170,7 +131,7 @@ app.post("/ask", async (req, res) => {
     }
 
     const safeMsg = message.trim().slice(0, 1200);
-    const reply = await callOpenAI(safeMsg);
+    const reply = await callGemini(safeMsg);
 
     res.json({ reply: brandSwap(reply) });
   } catch (err) {
@@ -179,5 +140,8 @@ app.post("/ask", async (req, res) => {
   }
 });
 
+// --- Render port binding ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log("SzalAI backend działa na porcie", PORT));
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("SzalAI backend działa na porcie", PORT);
+});
