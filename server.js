@@ -19,18 +19,17 @@ app.use(
   })
 );
 
-// ✅ PROSTE ENDPOINTY DO TESTU
+// ---- HEALTH ----
 app.get("/", (req, res) => res.status(200).send("SzalAI backend OK ✅"));
 app.get("/ping", (req, res) => res.status(200).json({ ok: true, where: "ping" }));
 app.get("/version", (req, res) =>
-  res.status(200).json({ ok: true, name: "szalai-backend", v: "1.0.1" })
+  res.status(200).json({ ok: true, name: "szalai-backend", v: "1.0.2" })
 );
 
-// ✅ Jak wejdziesz w przeglądarce /ask, też niech coś pokaże
 app.get("/ask", (req, res) => {
   res.status(200).json({
     ok: true,
-    hint: "Użyj POST /ask z JSON: {\"message\":\"siema\"}",
+    hint: 'Użyj POST /ask z JSON: {"message":"siema"}',
   });
 });
 
@@ -38,6 +37,10 @@ function brandSwap(text) {
   return String(text || "")
     .replace(/ChatGPT/gi, "SzalAI")
     .replace(/OpenAI/gi, "SzalAI");
+}
+
+function preview(t, n = 180) {
+  return String(t || "").slice(0, n);
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
@@ -51,8 +54,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 }
 
 function extractResponsesText(data) {
-  if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
-
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
   if (Array.isArray(data?.output)) {
     let out = "";
     for (const item of data.output) {
@@ -70,14 +74,57 @@ function extractResponsesText(data) {
 
 async function callOpenAI(message) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return "SzalAI: brak OPENAI_API_KEY na Render (Environment Variables) 🔑";
+  if (!apiKey) return "SzalAI DEBUG: brak OPENAI_API_KEY na Render ❌";
 
-  const system =
-    "Jesteś SzalAI. Odpowiadasz po polsku, krótko i konkretnie.";
+  const system = "Jesteś SzalAI. Odpowiadasz po polsku, krótko i konkretnie.";
 
   // 1) Responses
   try {
-    const r = await fetchWithTimeout("https://api.openai.com/v1/responses", {
+    const r = await fetchWithTimeout(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          input: [
+            { role: "system", content: system },
+            { role: "user", content: message },
+          ],
+          max_output_tokens: 250,
+        }),
+      },
+      15000
+    );
+
+    const raw = await r.text().catch(() => "");
+
+    if (!r.ok) {
+      return `SzalAI DEBUG: OpenAI /responses ERROR (${r.status}) ${preview(raw)}`;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return `SzalAI DEBUG: /responses non-JSON: ${preview(raw)}`;
+    }
+
+    const text = extractResponsesText(data);
+    if (text) return text;
+
+    return "SzalAI DEBUG: /responses OK, ale pusto ❌";
+  } catch (e) {
+    // fallback niżej
+  }
+
+  // 2) Chat Completions fallback
+  const r2 = await fetchWithTimeout(
+    "https://api.openai.com/v1/chat/completions",
+    {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -85,55 +132,39 @@ async function callOpenAI(message) {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        input: [
+        messages: [
           { role: "system", content: system },
           { role: "user", content: message },
         ],
-        max_output_tokens: 250,
+        max_tokens: 250,
       }),
-    });
-
-    const raw = await r.text().catch(() => "");
-    if (!r.ok) return `SzalAI: błąd OpenAI /responses (${r.status}) ${raw.slice(0, 140)}`;
-
-    let data;
-    try { data = JSON.parse(raw); } catch { return "SzalAI: /responses zwróciło nie-JSON"; }
-
-    const text = extractResponsesText(data);
-    if (text) return text;
-  } catch (e) {
-    // fallback niżej
-  }
-
-  // 2) Chat completions fallback
-  const r2 = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: message },
-      ],
-      max_tokens: 250,
-    }),
-  });
+    15000
+  );
 
   const raw2 = await r2.text().catch(() => "");
-  if (!r2.ok) return `SzalAI: błąd OpenAI /chat (${r2.status}) ${raw2.slice(0, 140)}`;
+
+  if (!r2.ok) {
+    return `SzalAI DEBUG: OpenAI /chat ERROR (${r2.status}) ${preview(raw2)}`;
+  }
 
   let data2;
-  try { data2 = JSON.parse(raw2); } catch { return "SzalAI: /chat zwróciło nie-JSON"; }
+  try {
+    data2 = JSON.parse(raw2);
+  } catch {
+    return `SzalAI DEBUG: /chat non-JSON: ${preview(raw2)}`;
+  }
 
-  return data2?.choices?.[0]?.message?.content?.trim() || "SzalAI: brak odpowiedzi 😅";
+  const out = data2?.choices?.[0]?.message?.content?.trim();
+  if (out) return out;
+
+  return "SzalAI DEBUG: /chat OK, ale pusto ❌";
 }
 
 app.post("/ask", async (req, res) => {
   try {
     const message = req.body?.message;
+
     if (typeof message !== "string" || !message.trim()) {
       return res.status(400).json({ reply: "SzalAI: wyślij pole message jako tekst." });
     }
